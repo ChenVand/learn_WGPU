@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "hello_compute",
+    "hello_triangle",
+    "hello_window",
+]
+resolver = "2"
+
+[workspace.dependencies]
+bytemuck = "1.21.0"
+env_logger = "0.11.6"
+log = "0.4.25"
+pollster = "0.4.0"
+wgpu = "24.0.1"
+winit = "0.30.8"
