@@ -3,6 +3,7 @@ members = [
     "hello_compute",
     "hello_triangle",
     "hello_window",
+    "first_wgpu_app",
 ]
 resolver = "2"
 

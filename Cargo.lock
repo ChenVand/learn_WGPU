@@ -460,6 +460,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "first_wgpu_app"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "env_logger",
+ "log",
+ "pollster",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

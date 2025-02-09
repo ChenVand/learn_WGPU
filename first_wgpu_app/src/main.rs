@@ -1,11 +1,17 @@
-use std::sync::Arc;
-use std::borrow::Cow;
+use std::{
+    sync::Arc, 
+    borrow::Cow, 
+    mem
+};
+
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
 };
+
+use wgpu::util::DeviceExt;
 
 struct State {
     window: Arc<Window>,
@@ -93,25 +99,111 @@ impl State {
                 ..Default::default()
             });
 
-        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("our hardcoded red triangle shaders"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
+        // Renders a GREEN screen
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        // Create the renderpass which will clear the screen.
+        let renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &texture_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    // load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {r: 0., g: 0., b: 0.4, a: 1.}),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
         });
 
-        let pipeline = self.device.create_render_pipeline(
+        // If you wanted to call any drawing commands, they would go here.
+
+        // End the renderpass.
+        drop(renderpass);
+
+        // Submit the command in the queue to execute
+        self.queue.submit([encoder.finish()]);
+        surface_texture.present();
+    }
+}
+
+struct World {
+    vertex_buf: wgpu::Buffer,
+    // index_buf: wgpu::Buffer,
+    // index_count: usize,
+    bind_group: wgpu::BindGroup,
+    uniform_buf: wgpu::Buffer,
+    pipeline: wgpu::RenderPipeline,
+}
+
+impl World {
+    fn new(
+        // config: &wgpu::SurfaceConfiguration,
+        surface_format: &wgpu::TextureFormat,
+        _adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Self {
+        let vertices: &[f32] = &[
+        //   X,    Y,
+            -0.8, -0.8, // Triangle 1 (Blue)
+            0.8, -0.8,
+            0.8,  0.8,
+        
+            -0.8, -0.8, // Triangle 2 (Red)
+            0.8,  0.8,
+            -0.8,  0.8,
+        ];
+
+        // let vertex_buf = state.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        //     label: Some("Cell vertices"),
+        //     contents: bytemuck::cast_slice(&vertices),
+        //     usage: wgpu::BufferUsages::VERTEX,
+        // });
+        let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cell vertices"),
+            size: mem::size_of_val(vertices) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&vertex_buf, 0, bytemuck::cast_slice(vertices));
+
+        let vertex_buffer_layout = wgpu::VertexBufferLayout {
+            array_stride: 2 * std::mem::size_of::<f32>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+            ],
+        };
+
+        // let module = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+        let cell_shader_module = device.create_shader_module(
+            wgpu::ShaderModuleDescriptor {
+                label: Some("Cell shader"),
+                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
+            }
+        );
+
+        let cell_pipeline = device.create_render_pipeline(
             &wgpu::RenderPipelineDescriptor {
-                label: Some("our hardcoded red triangle pipeline"),
+                label: Some("Cell pipeline"),
                 layout: None,
                 vertex: wgpu::VertexState {
-                    module: &module,
-                    entry_point: None, //Some("vs"),
-                    buffers: &[],
+                    module: &cell_shader_module,
+                    entry_point: Some("vertex_main"), //can be None because only 1
+                    buffers: &[vertex_buffer_layout],
                     compilation_options: Default::default(),    
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: None, //Some("fs"),
-                    targets: &[Some(self.surface_format.into())],
+                    module: &cell_shader_module,
+                    entry_point: Some("fragment_main"), //can be None because only 1
+                    targets: &[Some(surface_format.clone().into())],
                     compilation_options: Default::default(),    
                 }),
                 primitive: wgpu::PrimitiveState::default(),
@@ -121,43 +213,50 @@ impl State {
                 cache: None,
         });
 
-        let render_pass_descriptor = wgpu::RenderPassDescriptor {
-            label: Some("our basic canvas renderPass"),
+        todo!();
+    }
+
+    fn render(&self, state: &mut State) {
+        // Create texture view
+        let surface_texture = state
+            .surface
+            .get_current_texture()
+            .expect("failed to acquire next swapchain texture");
+        let texture_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor {
+                // Without add_srgb_suffix() the image we will be working with
+                // might not be "gamma correct".
+                format: Some(state.surface_format.add_srgb_suffix()),
+                ..Default::default()
+            });
+
+        // Renders a GREEN screen
+        let mut encoder = state.device.create_command_encoder(&Default::default());
+        // Create the renderpass which will clear the screen.
+        let renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &texture_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     // load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1,
-                        g: 0.2,
-                        b: 0.3,
-                        a: 1.0,
-                    }),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {r: 0., g: 0., b: 0.4, a: 1.}),
                     store: wgpu::StoreOp::Store,
                 },
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
-        };
+        });
 
-        // make a command encoder to start encoding commands
-        let mut encoder = self.device
-            .create_command_encoder(&Default::default());
-        
-        // make a render pass encoder to encode render specific commands
-        let mut renderpass = encoder
-            .begin_render_pass(&render_pass_descriptor);
-        renderpass.set_pipeline(&pipeline);
-        renderpass.draw(0..3, 0..1);
+        // If you wanted to call any drawing commands, they would go here.
 
         // End the renderpass.
         drop(renderpass);
-        let command_buffer = encoder.finish();
 
         // Submit the command in the queue to execute
-        self.queue.submit([command_buffer]);
+        state.queue.submit([encoder.finish()]);
         surface_texture.present();
     }
 }
@@ -165,6 +264,7 @@ impl State {
 #[derive(Default)]
 struct App {
     state: Option<State>,
+    world: Option<World>,
 }
 
 impl ApplicationHandler for App {
@@ -179,6 +279,8 @@ impl ApplicationHandler for App {
         let state = pollster::block_on(State::new(window.clone()));
         self.state = Some(state);
 
+        // self.world = Some(World::new(&self.state));
+
         window.request_redraw();
     }
 
@@ -191,6 +293,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 state.render();
+                // world.render(state);
                 // Emits a new redraw requested event.
                 state.get_window().request_redraw();
             }
