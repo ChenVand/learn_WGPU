@@ -11,7 +11,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use wgpu::util::DeviceExt;
+// use wgpu::util::DeviceExt;
 
 struct State {
     window: Arc<Window>,
@@ -84,57 +84,58 @@ impl State {
         self.configure_surface();
     }
 
-    fn render(&mut self) {
-        // Create texture view
-        let surface_texture = self
-            .surface
-            .get_current_texture()
-            .expect("failed to acquire next swapchain texture");
-        let texture_view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor {
-                // Without add_srgb_suffix() the image we will be working with
-                // might not be "gamma correct".
-                format: Some(self.surface_format.add_srgb_suffix()),
-                ..Default::default()
-            });
+    // fn render(&mut self) {
+    //     // Create texture view
+    //     let surface_texture = self
+    //         .surface
+    //         .get_current_texture()
+    //         .expect("failed to acquire next swapchain texture");
+    //     let texture_view = surface_texture
+    //         .texture
+    //         .create_view(&wgpu::TextureViewDescriptor {
+    //             // Without add_srgb_suffix() the image we will be working with
+    //             // might not be "gamma correct".
+    //             format: Some(self.surface_format.add_srgb_suffix()),
+    //             ..Default::default()
+    //         });
 
-        // Renders a GREEN screen
-        let mut encoder = self.device.create_command_encoder(&Default::default());
-        // Create the renderpass which will clear the screen.
-        let renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: None,
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &texture_view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    // load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
-                    load: wgpu::LoadOp::Clear(wgpu::Color {r: 0., g: 0., b: 0.4, a: 1.}),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
+    //     // Renders a GREEN screen
+    //     let mut encoder = self.device.create_command_encoder(&Default::default());
+    //     // Create the renderpass which will clear the screen.
+    //     let renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+    //         label: None,
+    //         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+    //             view: &texture_view,
+    //             resolve_target: None,
+    //             ops: wgpu::Operations {
+    //                 // load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
+    //                 load: wgpu::LoadOp::Clear(wgpu::Color {r: 0., g: 0., b: 0.4, a: 1.}),
+    //                 store: wgpu::StoreOp::Store,
+    //             },
+    //         })],
+    //         depth_stencil_attachment: None,
+    //         timestamp_writes: None,
+    //         occlusion_query_set: None,
+    //     });
 
-        // If you wanted to call any drawing commands, they would go here.
+    //     // If you wanted to call any drawing commands, they would go here.
 
-        // End the renderpass.
-        drop(renderpass);
+    //     // End the renderpass.
+    //     drop(renderpass);
 
-        // Submit the command in the queue to execute
-        self.queue.submit([encoder.finish()]);
-        surface_texture.present();
-    }
+    //     // Submit the command in the queue to execute
+    //     self.queue.submit([encoder.finish()]);
+    //     surface_texture.present();
+    // }
 }
 
+#[allow(dead_code)]
 struct World {
-    vertex_buf: wgpu::Buffer,
+    vertex_buf: Option<wgpu::Buffer>,
     // index_buf: wgpu::Buffer,
     // index_count: usize,
-    bind_group: wgpu::BindGroup,
-    uniform_buf: wgpu::Buffer,
+    bind_group: Option<wgpu::BindGroup>,
+    uniform_buf: Option<wgpu::Buffer>,
     pipeline: wgpu::RenderPipeline,
 }
 
@@ -142,7 +143,7 @@ impl World {
     fn new(
         // config: &wgpu::SurfaceConfiguration,
         surface_format: &wgpu::TextureFormat,
-        _adapter: &wgpu::Adapter,
+        // _adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Self {
@@ -182,7 +183,7 @@ impl World {
             ],
         };
 
-        // let module = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+        // let cell_shader_module = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let cell_shader_module = device.create_shader_module(
             wgpu::ShaderModuleDescriptor {
                 label: Some("Cell shader"),
@@ -203,7 +204,12 @@ impl World {
                 fragment: Some(wgpu::FragmentState {
                     module: &cell_shader_module,
                     entry_point: Some("fragment_main"), //can be None because only 1
-                    targets: &[Some(surface_format.clone().into())],
+                    // targets: &[Some(surface_format.clone().into())],
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format.clone(),
+                        blend: None, // or another blend configuration
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                     compilation_options: Default::default(),    
                 }),
                 primitive: wgpu::PrimitiveState::default(),
@@ -213,7 +219,12 @@ impl World {
                 cache: None,
         });
 
-        todo!();
+        Self {
+            vertex_buf: Some(vertex_buf),
+            pipeline: cell_pipeline,
+            bind_group: None,
+            uniform_buf: None,
+        }
     }
 
     fn render(&self, state: &mut State) {
@@ -234,8 +245,8 @@ impl World {
         // Renders a GREEN screen
         let mut encoder = state.device.create_command_encoder(&Default::default());
         // Create the renderpass which will clear the screen.
-        let renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: None,
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Render pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &texture_view,
                 resolve_target: None,
@@ -251,9 +262,12 @@ impl World {
         });
 
         // If you wanted to call any drawing commands, they would go here.
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_vertex_buffer(0, self.vertex_buf.as_ref().unwrap().slice(..));
+        render_pass.draw(0..6, 0..1);
 
         // End the renderpass.
-        drop(renderpass);
+        drop(render_pass);
 
         // Submit the command in the queue to execute
         state.queue.submit([encoder.finish()]);
@@ -279,21 +293,27 @@ impl ApplicationHandler for App {
         let state = pollster::block_on(State::new(window.clone()));
         self.state = Some(state);
 
-        // self.world = Some(World::new(&self.state));
+        let state_ref = self.state.as_ref().unwrap();
+        self.world = Some(World::new(
+            &state_ref.surface_format, 
+            &state_ref.device, 
+            &state_ref.queue
+        ));
 
         window.request_redraw();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let state = self.state.as_mut().unwrap();
+        let world = self.world.as_mut().unwrap();
         match event {
             WindowEvent::CloseRequested => {
                 println!("The close button was pressed; stopping");
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                state.render();
-                // world.render(state);
+                world.render(state);
+
                 // Emits a new redraw requested event.
                 state.get_window().request_redraw();
             }
