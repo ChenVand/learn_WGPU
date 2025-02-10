@@ -88,10 +88,12 @@ impl State {
 #[allow(dead_code)]
 struct World {
     vertex_buf: Option<wgpu::Buffer>,
+    num_vertices: usize,
     // index_buf: wgpu::Buffer,
     // index_count: usize,
-    bind_group: Option<wgpu::BindGroup>,
     uniform_buf: Option<wgpu::Buffer>,
+    grid_size: u32,
+    bind_group: Option<wgpu::BindGroup>,
     pipeline: wgpu::RenderPipeline,
 }
 
@@ -103,11 +105,11 @@ impl World {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Self {
-        let grid_size: f32 = 4.;
+        let grid_size: u32 = 32;
 
         let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Grid uniforms"),
-            contents: bytemuck::cast_slice(&[grid_size, grid_size]),
+            contents: bytemuck::cast_slice(&[grid_size as f32, grid_size as f32]),
             usage: wgpu::BufferUsages::UNIFORM, // | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -196,6 +198,8 @@ impl World {
 
         Self {
             vertex_buf: Some(vertex_buf),
+            num_vertices: vertices.len() / 2,
+            grid_size: grid_size,
             uniform_buf: Some(uniform_buf), //This is only a handle to the actual buffer
             bind_group: Some(bind_group),
             pipeline: cell_pipeline,
@@ -241,7 +245,10 @@ impl World {
         render_pass.set_vertex_buffer(0, self.vertex_buf.as_ref().unwrap().slice(..));
         
         render_pass.set_bind_group(0, self.bind_group.as_ref().unwrap(), &[]);
-        render_pass.draw(0..6, 0..1);
+        render_pass.draw(
+            0..self.num_vertices as u32, 
+            0..(self.grid_size * self.grid_size)
+        );
 
         // End the renderpass.
         drop(render_pass);
