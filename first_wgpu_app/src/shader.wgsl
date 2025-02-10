@@ -1,9 +1,11 @@
+@group(0) @binding(0) var<uniform> grid: vec2f;
+
 @vertex
-//pos ia vertwx attribute 0
+//pos is vertex attribute 0
 fn vertex_main(@location(0) pos: vec2f) 
     -> @builtin(position) vec4f {
 
-    return vec4f(pos, 0, 1);
+    return vec4f(pos/grid, 0, 1);
 }
 
 @fragment

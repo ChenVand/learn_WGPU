@@ -11,7 +11,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
-// use wgpu::util::DeviceExt;
+use wgpu::util::DeviceExt;
 
 struct State {
     window: Arc<Window>,
@@ -83,50 +83,6 @@ impl State {
         // reconfigure the surface
         self.configure_surface();
     }
-
-    // fn render(&mut self) {
-    //     // Create texture view
-    //     let surface_texture = self
-    //         .surface
-    //         .get_current_texture()
-    //         .expect("failed to acquire next swapchain texture");
-    //     let texture_view = surface_texture
-    //         .texture
-    //         .create_view(&wgpu::TextureViewDescriptor {
-    //             // Without add_srgb_suffix() the image we will be working with
-    //             // might not be "gamma correct".
-    //             format: Some(self.surface_format.add_srgb_suffix()),
-    //             ..Default::default()
-    //         });
-
-    //     // Renders a GREEN screen
-    //     let mut encoder = self.device.create_command_encoder(&Default::default());
-    //     // Create the renderpass which will clear the screen.
-    //     let renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-    //         label: None,
-    //         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-    //             view: &texture_view,
-    //             resolve_target: None,
-    //             ops: wgpu::Operations {
-    //                 // load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
-    //                 load: wgpu::LoadOp::Clear(wgpu::Color {r: 0., g: 0., b: 0.4, a: 1.}),
-    //                 store: wgpu::StoreOp::Store,
-    //             },
-    //         })],
-    //         depth_stencil_attachment: None,
-    //         timestamp_writes: None,
-    //         occlusion_query_set: None,
-    //     });
-
-    //     // If you wanted to call any drawing commands, they would go here.
-
-    //     // End the renderpass.
-    //     drop(renderpass);
-
-    //     // Submit the command in the queue to execute
-    //     self.queue.submit([encoder.finish()]);
-    //     surface_texture.present();
-    // }
 }
 
 #[allow(dead_code)]
@@ -147,6 +103,14 @@ impl World {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Self {
+        let grid_size: f32 = 4.;
+
+        let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Grid uniforms"),
+            contents: bytemuck::cast_slice(&[grid_size, grid_size]),
+            usage: wgpu::BufferUsages::UNIFORM, // | wgpu::BufferUsages::COPY_DST,
+        });
+
         let vertices: &[f32] = &[
         //   X,    Y,
             -0.8, -0.8, // Triangle 1 (Blue)
@@ -158,7 +122,7 @@ impl World {
             -0.8,  0.8,
         ];
 
-        // let vertex_buf = state.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        // let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         //     label: Some("Cell vertices"),
         //     contents: bytemuck::cast_slice(&vertices),
         //     usage: wgpu::BufferUsages::VERTEX,
@@ -219,11 +183,22 @@ impl World {
                 cache: None,
         });
 
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cell renderer bind group"),
+            layout: &cell_pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+            ],
+        });
+
         Self {
             vertex_buf: Some(vertex_buf),
+            uniform_buf: Some(uniform_buf), //This is only a handle to the actual buffer
+            bind_group: Some(bind_group),
             pipeline: cell_pipeline,
-            bind_group: None,
-            uniform_buf: None,
         }
     }
 
@@ -264,6 +239,8 @@ impl World {
         // If you wanted to call any drawing commands, they would go here.
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_vertex_buffer(0, self.vertex_buf.as_ref().unwrap().slice(..));
+        
+        render_pass.set_bind_group(0, self.bind_group.as_ref().unwrap(), &[]);
         render_pass.draw(0..6, 0..1);
 
         // End the renderpass.
