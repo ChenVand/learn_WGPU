@@ -92,6 +92,7 @@ struct World {
     // index_buf: wgpu::Buffer,
     // index_count: usize,
     uniform_buf: Option<wgpu::Buffer>,
+    storage_buf: Option<wgpu::Buffer>,
     grid_size: u32,
     bind_group: Option<wgpu::BindGroup>,
     pipeline: wgpu::RenderPipeline,
@@ -149,6 +150,17 @@ impl World {
             ],
         };
 
+        // An array representing the active state of each cell.
+        let mut cell_state_array = vec![0; (grid_size * grid_size) as usize];
+        for i in (0..cell_state_array.len()).step_by(3) {
+            cell_state_array[i] = 1;
+        } 
+        let cell_state_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cell state"),
+            contents: bytemuck::cast_slice(&cell_state_array[..]),
+            usage: wgpu::BufferUsages::STORAGE, // | wgpu::BufferUsages::COPY_DST,
+        });
+
         // let cell_shader_module = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let cell_shader_module = device.create_shader_module(
             wgpu::ShaderModuleDescriptor {
@@ -193,6 +205,10 @@ impl World {
                     binding: 0,
                     resource: uniform_buf.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: cell_state_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -201,6 +217,7 @@ impl World {
             num_vertices: vertices.len() / 2,
             grid_size: grid_size,
             uniform_buf: Some(uniform_buf), //This is only a handle to the actual buffer
+            storage_buf: Some(cell_state_buffer),
             bind_group: Some(bind_group),
             pipeline: cell_pipeline,
         }
@@ -231,7 +248,7 @@ impl World {
                 resolve_target: None,
                 ops: wgpu::Operations {
                     // load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
-                    load: wgpu::LoadOp::Clear(wgpu::Color {r: 0., g: 0., b: 0.4, a: 1.}),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {r: 0., g: 0., b: 0.3, a: 1.}),
                     store: wgpu::StoreOp::Store,
                 },
             })],
