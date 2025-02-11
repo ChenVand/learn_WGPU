@@ -1,7 +1,8 @@
 use std::{
     sync::Arc, 
     borrow::Cow, 
-    mem
+    mem,
+    time::{Duration, Instant},
 };
 
 use winit::{
@@ -91,10 +92,10 @@ struct World {
     num_vertices: usize,
     // index_buf: wgpu::Buffer,
     // index_count: usize,
-    uniform_buf: Option<wgpu::Buffer>,
-    storage_buf: Option<wgpu::Buffer>,
+    // uniform_buffs: Vec<wgpu::Buffer>,
+    // storage_buffs: Vec<wgpu::Buffer>,
     grid_size: u32,
-    bind_group: Option<wgpu::BindGroup>,
+    bind_groups: Vec<wgpu::BindGroup>,
     pipeline: wgpu::RenderPipeline,
 }
 
@@ -151,15 +152,30 @@ impl World {
         };
 
         // An array representing the active state of each cell.
-        let mut cell_state_array = vec![0; (grid_size * grid_size) as usize];
+        let mut cell_state_array: Vec<u32> = vec![0; (grid_size * grid_size) as usize];
+
+        let cell_state_storage = [device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cell state A"),
+            size: mem::size_of_val(&cell_state_array[..]) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }),
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cell state B"),
+            size: mem::size_of_val(&cell_state_array[..]) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })];
+
         for i in (0..cell_state_array.len()).step_by(3) {
             cell_state_array[i] = 1;
         } 
-        let cell_state_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Cell state"),
-            contents: bytemuck::cast_slice(&cell_state_array[..]),
-            usage: wgpu::BufferUsages::STORAGE, // | wgpu::BufferUsages::COPY_DST,
-        });
+        queue.write_buffer(&cell_state_storage[0], 0, bytemuck::cast_slice(&cell_state_array[..]));
+
+        for i in 0..cell_state_array.len() {
+            cell_state_array[i] = i as u32 % 2;
+        } 
+        queue.write_buffer(&cell_state_storage[1], 0, bytemuck::cast_slice(&cell_state_array[..]));
 
         // let cell_shader_module = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let cell_shader_module = device.create_shader_module(
@@ -197,8 +213,8 @@ impl World {
                 cache: None,
         });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Cell renderer bind group"),
+        let bind_groups = vec![device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cell renderer bind group A"),
             layout: &cell_pipeline.get_bind_group_layout(0),
             entries: &[
                 wgpu::BindGroupEntry {
@@ -207,23 +223,37 @@ impl World {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: cell_state_buffer.as_entire_binding(),
+                    resource: cell_state_storage[0].as_entire_binding(),
                 },
             ],
-        });
+        }),
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cell renderer bind group B"),
+            layout: &cell_pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: cell_state_storage[1].as_entire_binding(),
+                },
+            ],
+        })];
 
         Self {
             vertex_buf: Some(vertex_buf),
             num_vertices: vertices.len() / 2,
             grid_size: grid_size,
-            uniform_buf: Some(uniform_buf), //This is only a handle to the actual buffer
-            storage_buf: Some(cell_state_buffer),
-            bind_group: Some(bind_group),
+            // uniform_buffs: uniform_buf, //This is only a handle to the actual buffer
+            // storage_buffs: cell_state_storage,
+            bind_groups: bind_groups,
             pipeline: cell_pipeline,
         }
     }
 
-    fn render(&self, state: &mut State) {
+    fn render(&self, state: &mut State, frame_idx: usize) {
         // Create texture view
         let surface_texture = state
             .surface
@@ -261,7 +291,7 @@ impl World {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_vertex_buffer(0, self.vertex_buf.as_ref().unwrap().slice(..));
         
-        render_pass.set_bind_group(0, self.bind_group.as_ref().unwrap(), &[]);
+        render_pass.set_bind_group(0, &self.bind_groups[frame_idx], &[]);
         render_pass.draw(
             0..self.num_vertices as u32, 
             0..(self.grid_size * self.grid_size)
@@ -276,11 +306,22 @@ impl World {
     }
 }
 
+const TARGET_FPS: u32 = 5; // Desired frames per second
+
 #[derive(Default)]
 struct App {
     state: Option<State>,
     world: Option<World>,
+    frame_counter: usize,
+    frame_duration: Duration,
 }
+
+impl App {
+    fn new() -> Self {
+        Self{frame_duration: Duration::from_secs_f64(1.0 / TARGET_FPS as f64), ..Default::default()}
+    }
+}
+
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -307,13 +348,19 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let state = self.state.as_mut().unwrap();
         let world = self.world.as_mut().unwrap();
+        let start = Instant::now();
         match event {
             WindowEvent::CloseRequested => {
                 println!("The close button was pressed; stopping");
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                world.render(state);
+                world.render(state, self.frame_counter%2);
+                self.frame_counter += 1;
+
+                while Instant::now() - start < self.frame_duration {
+                    // Busy-wait loop
+                }
 
                 // Emits a new redraw requested event.
                 state.get_window().request_redraw();
@@ -329,10 +376,6 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
-    // wgpu uses `log` for all of our logging, so we initialize a logger with the `env_logger` crate.
-    //
-    // To change the log level, set the `RUST_LOG` environment variable. See the `env_logger`
-    // documentation for more information.
     env_logger::init();
 
     let event_loop = EventLoop::new().unwrap();
@@ -341,14 +384,14 @@ fn main() {
     // iteration regardless of whether or not new events are available to
     // process. Preferred for applications that want to render as fast as
     // possible, like games.
-    event_loop.set_control_flow(ControlFlow::Poll);
+    // event_loop.set_control_flow(ControlFlow::Poll);
 
     // When the current loop iteration finishes, suspend the thread until
     // another event arrives. Helps keeping CPU utilization low if nothing
     // is happening, which is preferred if the application might be idling in
     // the background.
-    // event_loop.set_control_flow(ControlFlow::Wait);
+    event_loop.set_control_flow(ControlFlow::Wait);
 
-    let mut app = App::default();
+    let mut app = App::new();
     event_loop.run_app(&mut app).unwrap();
 }
