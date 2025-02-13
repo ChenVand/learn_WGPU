@@ -5,6 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use rand::Rng;
+
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -12,7 +14,8 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use wgpu::util::DeviceExt;
+#[allow(unused_imports)]
+use wgpu::{core::pipeline, util::DeviceExt};
 
 struct State {
     window: Arc<Window>,
@@ -96,7 +99,8 @@ struct World {
     // storage_buffs: Vec<wgpu::Buffer>,
     grid_size: u32,
     bind_groups: Vec<wgpu::BindGroup>,
-    pipeline: wgpu::RenderPipeline,
+    render_pipeline: Option<wgpu::RenderPipeline>,
+    compute_pipeline: Option<wgpu::ComputePipeline>,
 }
 
 impl World {
@@ -107,7 +111,7 @@ impl World {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Self {
-        let grid_size: u32 = 32;
+        let grid_size: u32 = 128;
 
         let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Grid uniforms"),
@@ -167,28 +171,120 @@ impl World {
             mapped_at_creation: false,
         })];
 
-        for i in (0..cell_state_array.len()).step_by(3) {
-            cell_state_array[i] = 1;
-        } 
-        queue.write_buffer(&cell_state_storage[0], 0, bytemuck::cast_slice(&cell_state_array[..]));
-
+        // for i in (0..cell_state_array.len()).step_by(3) {
+        //     cell_state_array[i] = 1;
+        // } 
+        let mut rng = rand::rng();
         for i in 0..cell_state_array.len() {
-            cell_state_array[i] = i as u32 % 2;
-        } 
+            cell_state_array[i] = if rng.random::<f64>() > 0.6 { 1 } else { 0 };
+        }
+        queue.write_buffer(&cell_state_storage[0], 0, bytemuck::cast_slice(&cell_state_array[..]));
+ 
         queue.write_buffer(&cell_state_storage[1], 0, bytemuck::cast_slice(&cell_state_array[..]));
 
         // let cell_shader_module = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let cell_shader_module = device.create_shader_module(
             wgpu::ShaderModuleDescriptor {
-                label: Some("Cell shader"),
+                label: Some("Cell shaders"),
                 source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
             }
         );
 
+        let simulation_shader_module = device.create_shader_module(
+            wgpu::ShaderModuleDescriptor {
+                label: Some("Game of Life simulation shader"),
+                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("c_shader.wgsl"))),
+            }
+        );
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cell Bind Group Layout"),
+            entries: &[
+                // Binding 0: Uniform buffer (grid uniform)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 1: Read-only storage buffer (cell state input)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 2: Storage buffer (cell state output)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let bind_groups = vec![
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Cell renderer bind group A"),
+                layout: &bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: cell_state_storage[0].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: cell_state_storage[1].as_entire_binding(),
+                    },
+                ],
+            }),
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Cell renderer bind group B"),
+                layout: &bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: cell_state_storage[1].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: cell_state_storage[0].as_entire_binding(),
+                    },
+                ],
+            })
+        ];
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Cell pipeline layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        
         let cell_pipeline = device.create_render_pipeline(
             &wgpu::RenderPipelineDescriptor {
                 label: Some("Cell pipeline"),
-                layout: None,
+                layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &cell_shader_module,
                     entry_point: Some("vertex_main"), //can be None because only 1
@@ -213,34 +309,16 @@ impl World {
                 cache: None,
         });
 
-        let bind_groups = vec![device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Cell renderer bind group A"),
-            layout: &cell_pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: cell_state_storage[0].as_entire_binding(),
-                },
-            ],
-        }),
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Cell renderer bind group B"),
-            layout: &cell_pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: cell_state_storage[1].as_entire_binding(),
-                },
-            ],
-        })];
+        let simulation_pipeline = device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("Simulation pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &simulation_shader_module,
+                entry_point: Some("compute_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            }
+        );
 
         Self {
             vertex_buf: Some(vertex_buf),
@@ -249,7 +327,8 @@ impl World {
             // uniform_buffs: uniform_buf, //This is only a handle to the actual buffer
             // storage_buffs: cell_state_storage,
             bind_groups: bind_groups,
-            pipeline: cell_pipeline,
+            render_pipeline: Some(cell_pipeline),
+            compute_pipeline: Some(simulation_pipeline),
         }
     }
 
@@ -270,6 +349,17 @@ impl World {
 
         // Renders a GREEN screen
         let mut encoder = state.device.create_command_encoder(&Default::default());
+        //###########################3
+        let mut compute_pass = encoder.begin_compute_pass(&Default::default());
+        
+        compute_pass.set_pipeline(self.compute_pipeline.as_ref().unwrap());
+        compute_pass.set_bind_group(0, &self.bind_groups[frame_idx], &[]);
+
+        let workgroup_count = self.grid_size.div_ceil(8);
+        compute_pass.dispatch_workgroups(workgroup_count, workgroup_count, 1);
+
+        drop(compute_pass);
+
         // Create the renderpass which will clear the screen.
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Render pass"),
@@ -288,7 +378,7 @@ impl World {
         });
 
         // If you wanted to call any drawing commands, they would go here.
-        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_pipeline(self.render_pipeline.as_ref().unwrap());
         render_pass.set_vertex_buffer(0, self.vertex_buf.as_ref().unwrap().slice(..));
         
         render_pass.set_bind_group(0, &self.bind_groups[frame_idx], &[]);
@@ -321,7 +411,6 @@ impl App {
         Self{frame_duration: Duration::from_secs_f64(1.0 / TARGET_FPS as f64), ..Default::default()}
     }
 }
-
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
